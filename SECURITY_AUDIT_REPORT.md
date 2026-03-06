@@ -1,0 +1,214 @@
+# Security & Privacy Audit Report: jcodemunch-mcp v0.2.17
+
+**Audit Date:** 2026-03-06
+**Auditor:** Automated Security Analysis (Claude)
+**Scope:** Full static + dynamic analysis of data exfiltration, telemetry, and credential leakage
+**Repository:** https://github.com/jgravelle/jcodemunch-mcp
+**Commit:** v0.2.17
+
+---
+
+## Executive Summary
+
+**Overall Rating: USE WITH CAUTION**
+
+The jcodemunch-mcp server is well-engineered with strong security controls (path traversal prevention, secret file exclusion, symlink protection). No unauthorized data exfiltration or credential leakage was detected. However, the server does include **opt-out telemetry** that contacts a third-party domain, and there are known CVEs in the `mcp` dependency that should be addressed.
+
+---
+
+## Phase 1: Static Application Security Testing
+
+### 1.1 Dependency Review
+
+| Package | Version | Verdict |
+|---------|---------|---------|
+| `mcp` | >=1.0.0,<1.10.0 | Official MCP SDK. **2 known CVEs** (CVE-2025-53365, CVE-2025-66416) |
+| `httpx` | >=0.27.0 | Official HTTP client. Clean. |
+| `tree-sitter-language-pack` | >=0.7.0,<1.0.0 | Official tree-sitter bindings. Clean. |
+| `pathspec` | >=0.12.0 | Gitignore pattern matching. Clean. |
+| `anthropic` (optional) | >=0.40.0 | Official Anthropic SDK. Clean. |
+| `google-generativeai` (optional) | >=0.8.0 | Official Google AI SDK. Clean. |
+
+**Finding:** No typo-squatted packages. No suspicious or unverified telemetry SDKs in dependencies. Two CVEs exist in the `mcp` SDK (fixed in 1.10.0 and 1.23.0 respectively).
+
+### 1.2 Network Library & Domain Enumeration
+
+**Network libraries used:** Only `httpx` (HTTP client) and `urllib.parse` (URL parsing only, no network calls).
+
+**Complete list of external domains in source code:**
+
+| Domain | File | Purpose | User Data Sent |
+|--------|------|---------|----------------|
+| `api.github.com` | `tools/index_repo.py:64,183` | Fetch repo tree and file contents | GITHUB_TOKEN in auth header |
+| `j.gravelle.us` | `storage/token_tracker.py:24` | Anonymous telemetry (community savings meter) | `{"delta": int, "anon_id": "uuid"}` only |
+
+**No other domains** are hardcoded anywhere in the source. The `ANTHROPIC_BASE_URL` and `OPENAI_API_BASE` environment variables allow user-configured endpoints for AI summarization.
+
+### 1.3 Credential Data Flow Tracing
+
+| Credential | Read From | Sent To | In Logs? | In Index Files? | In Error Messages? | Leak Risk |
+|---|---|---|---|---|---|---|
+| `GITHUB_TOKEN` | `os.environ.get("GITHUB_TOKEN")` | `Authorization: token {val}` header to `api.github.com` only | No | No | No (only "Set GITHUB_TOKEN" hint) | **Low** |
+| `ANTHROPIC_API_KEY` | `os.environ.get("ANTHROPIC_API_KEY")` | `Anthropic(api_key=val)` constructor (SDK handles transport) | No | No | No | **Low** |
+| `GOOGLE_API_KEY` | `os.environ.get("GOOGLE_API_KEY")` | `genai.configure(api_key=val)` (SDK handles transport) | No | No | No | **Low** |
+| `OPENAI_API_KEY` | `os.environ.get("OPENAI_API_KEY", "local-llm")` | `Authorization: Bearer {val}` to user-configured `OPENAI_API_BASE` | No | No | No | **Medium** (SSRF) |
+
+**Grep verification:** Zero matches for `print` or `logging` statements containing credential variable names.
+
+### 1.4 Telemetry Analysis
+
+**File:** `src/jcodemunch_mcp/storage/token_tracker.py:24-59`
+
+The server sends anonymous usage telemetry to `https://j.gravelle.us/APIs/savings/post.php`:
+
+```python
+_TELEMETRY_URL = "https://j.gravelle.us/APIs/savings/post.php"
+
+def _share_savings(delta: int, anon_id: str) -> None:
+    threading.Thread(target=lambda: httpx.post(
+        _TELEMETRY_URL,
+        json={"delta": delta, "anon_id": anon_id},
+        timeout=3.0,
+    ), daemon=True).start()
+```
+
+**Telemetry characteristics:**
+- Payload contains ONLY `{"delta": <tokens_saved>, "anon_id": "<uuid4>"}` — verified statically and dynamically
+- `anon_id` is a random UUID4, not derived from hostname, username, IP, or any identifying information
+- No code snippets, file paths, repository names, or credentials are included
+- Fire-and-forget daemon thread — does not block operations
+- **Opt-out:** Set `JCODEMUNCH_SHARE_SAVINGS=0` to disable entirely
+- Enabled by default (opt-out, not opt-in)
+
+---
+
+## Phase 2: Virtual Environment Setup
+
+A clean Python 3 virtual environment was created at `/tmp/audit-venv` with the package installed in editable mode. An HTTP interception layer was written to monkey-patch `httpx.Client.send`, `httpx.AsyncClient.send`, and `httpx.post` to log all outbound requests with credential redaction.
+
+---
+
+## Phase 3: Dynamic Behavioral Analysis
+
+### 3.1 Test Results
+
+| Test | Result | Details |
+|------|--------|---------|
+| Telemetry payload inspection | **PASS** | Payload contains only `delta` + `anon_id`. No credentials, paths, or code. |
+| `index_repo` network behavior | **PASS** | Only contacted `api.github.com`. `GITHUB_TOKEN` sent only in `Authorization` header. |
+| Read-only tools (`list_repos`) | **PASS** | Zero network requests for read-only operations. |
+| `record_savings` telemetry | **PASS** | Telemetry POST to `j.gravelle.us` with minimal anonymous payload. |
+| Filesystem credential audit | **PASS** | Index files (`_savings.json`) contain no credentials. |
+
+### 3.2 Complete Network Traffic Log
+
+During the full test run, exactly **5 HTTP requests** were captured:
+
+1. `POST https://j.gravelle.us/APIs/savings/post.php` — telemetry (test 1, direct call)
+2. `POST https://j.gravelle.us/APIs/savings/post.php` — same request at transport layer
+3. `GET https://api.github.com/repos/testowner/testrepo/git/trees/HEAD?recursive=1` — repo tree fetch
+4. `POST https://j.gravelle.us/APIs/savings/post.php` — telemetry (test 4, via record_savings)
+5. `POST https://j.gravelle.us/APIs/savings/post.php` — same request at transport layer
+
+**Domains contacted:** `api.github.com`, `j.gravelle.us` — **no other domains**.
+
+### 3.3 Credential Leak Check
+
+- `fake_gh_token_12345` — appeared ONLY in `Authorization` header to `api.github.com`. Never in request bodies, telemetry payloads, or filesystem.
+- `fake_ant_key_67890` — did NOT appear in any network request (Anthropic SDK was not installed in test env, so summarizer fell back to signature mode). The API key is passed to the `Anthropic()` constructor which handles transport internally.
+
+---
+
+## Phase 4: Security Findings
+
+### CRITICAL: None
+
+### HIGH: None
+
+### MEDIUM
+
+#### M1: Opt-Out Telemetry to Third-Party Domain
+- **Risk:** The server sends data to `j.gravelle.us` by default without explicit user consent.
+- **Payload:** Anonymous and minimal (`delta` + `anon_id`), but the domain is owned by the package author, not a well-known analytics provider.
+- **Mitigation:** Set `JCODEMUNCH_SHARE_SAVINGS=0` in your environment.
+- **Recommendation:** Telemetry should be opt-in, not opt-out. Document prominently in installation instructions.
+
+#### M2: Known CVEs in `mcp` Dependency
+- **CVE-2025-53365** — Fixed in mcp 1.10.0 (current upper bound is <1.10.0, blocking the fix)
+- **CVE-2025-66416** — Fixed in mcp 1.23.0
+- **Recommendation:** Update `pyproject.toml` dependency range: `mcp>=1.10.0,<2.0.0`
+
+#### M3: SSRF Risk via Configurable Base URLs
+- **Risk:** `ANTHROPIC_BASE_URL` and `OPENAI_API_BASE` environment variables allow redirecting AI API calls to arbitrary endpoints. If an attacker controls these env vars, code symbol signatures (not full source) could be exfiltrated to an attacker-controlled endpoint.
+- **Data at risk:** Symbol signatures (function names, parameter types) — NOT full source code.
+- **Mitigation:** These env vars are set by the user, so this requires environment compromise first.
+- **Recommendation:** Consider validating base URLs against an allowlist or at least logging a warning for non-standard endpoints.
+
+### LOW
+
+#### L1: No TLS Certificate Pinning on Telemetry
+- The telemetry POST to `j.gravelle.us` relies on default SSL verification. A MITM attacker on the network could intercept or modify telemetry.
+- **Impact:** Minimal — payload contains only token counts, no sensitive data.
+
+#### L2: Logging to stderr by Default
+- MCP uses stdio for communication. Logging to stderr (the default) could theoretically interfere with MCP stream parsing.
+- **Recommendation:** Already documented; file-based logging is recommended.
+
+#### L3: TOCTOU in File Operations
+- Between path validation and file read, a race condition could theoretically allow symlink replacement.
+- **Impact:** Low — requires local filesystem access and precise timing.
+
+---
+
+## Security Controls Assessment
+
+| Control | Status | Implementation |
+|---------|--------|---------------|
+| Path traversal prevention | Implemented | `os.path.commonpath()` validation |
+| Symlink escape protection | Implemented | Default disabled, fail-safe on errors |
+| Secret file exclusion | Implemented | 27 patterns via fnmatch |
+| Binary file detection | Implemented | Extension + null-byte content check |
+| File size limits | Implemented | 500KB default, configurable |
+| UTF-8 safe decode | Implemented | `errors="replace"` |
+| CI secret scanning | Implemented | sdist checked for sensitive paths |
+| Credential logging prevention | Verified | Zero print/log statements with credentials |
+| Error message safety | Verified | No stack traces or credentials in MCP error responses |
+
+---
+
+## Final Rating
+
+### USE WITH CAUTION
+
+**Rationale:** The codebase demonstrates strong security practices and no evidence of malicious data exfiltration was found. All credentials are handled correctly. However, the opt-out telemetry to a third-party domain (`j.gravelle.us`) and known CVEs in the `mcp` dependency warrant the "Use with Caution" rating rather than "Safe".
+
+### Remediation Steps (Priority Order)
+
+1. **Set `JCODEMUNCH_SHARE_SAVINGS=0`** in your MCP server configuration to disable telemetry.
+2. **Pin `mcp>=1.10.0`** to address CVE-2025-53365 (or wait for the upstream to update their version range).
+3. **Audit your environment variables** — ensure `ANTHROPIC_BASE_URL` and `OPENAI_API_BASE` are not set to untrusted endpoints.
+4. **Use file-based logging** (`--log-file /path/to/log`) instead of stderr.
+5. **Restrict `GITHUB_TOKEN` scope** to read-only (`repo:read` or `public_repo`) to minimize blast radius.
+
+### Safe Configuration Example
+
+```json
+{
+  "mcpServers": {
+    "jcodemunch": {
+      "command": "jcodemunch-mcp",
+      "args": ["--log-file", "/tmp/jcodemunch.log"],
+      "env": {
+        "GITHUB_TOKEN": "ghp_YOUR_READONLY_TOKEN",
+        "CODE_INDEX_PATH": "/tmp/code-index",
+        "JCODEMUNCH_SHARE_SAVINGS": "0",
+        "JCODEMUNCH_MAX_INDEX_FILES": "500"
+      }
+    }
+  }
+}
+```
+
+---
+
+*Audit methodology: Static grep-based analysis + monkey-patched HTTP interception + runtime behavioral testing with dummy credentials. No actual credentials were used or exposed during this audit.*
