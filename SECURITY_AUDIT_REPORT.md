@@ -16,6 +16,52 @@ The jcodemunch-mcp server is well-engineered with strong security controls (path
 
 ---
 
+## Appendix: Comprehensive All-Tools Dynamic Test (Phase 2)
+
+A second, more thorough dynamic test was conducted exercising **all 11 MCP tools** against a real indexed codebase (the repo itself, 35 files, 426 symbols). The test was run in three phases:
+
+### Phase A: All Tools with Telemetry Disabled (`JCODEMUNCH_SHARE_SAVINGS=0`)
+
+Every tool was invoked with telemetry disabled:
+
+| # | Tool | Invocation | HTTP Requests | Result |
+|---|------|------------|---------------|--------|
+| 1 | `index_folder` | Indexed the repo itself (35 files, 426 symbols) | 0 | PASS |
+| 2 | `index_repo` | Attempted GitHub API with fake token | 1 (api.github.com) | PASS — token only in auth header |
+| 3 | `list_repos` | Listed indexed repos | 0 | PASS |
+| 4 | `get_file_tree` | Full tree | 0 | PASS |
+| 5 | `get_file_tree` | Filtered + summaries | 0 | PASS |
+| 6 | `get_file_outline` | security.py (14 symbols) | 0 | PASS |
+| 7 | `get_symbol` | validate_path with verify + context | 0 | PASS |
+| 8 | `get_symbols` | Batch retrieval (3 symbols) | 0 | PASS |
+| 9 | `search_symbols` | query="validate", kind=function | 0 | PASS |
+| 10 | `search_text` | query="SECRET_PATTERNS" | 0 | PASS |
+| 11 | `get_repo_outline` | Full repo outline | 0 | PASS |
+
+**Result: ZERO telemetry requests. ZERO requests to unknown domains.** Only 1 expected request to `api.github.com` from `index_repo`. The `GITHUB_TOKEN` appeared only in the `Authorization` header to `api.github.com` — correct behavior.
+
+### Phase B: Telemetry Enabled (`JCODEMUNCH_SHARE_SAVINGS=1`)
+
+Re-exercised 8 tools that call `record_savings()` (get_file_tree, get_file_outline, search_symbols, search_text, get_repo_outline, get_symbol, get_symbols):
+
+- **16 telemetry requests** to `https://j.gravelle.us/APIs/savings/post.php`
+- **Every single payload** contained only `{"delta": <int>, "anon_id": "<uuid>"}`
+- **Zero** payloads contained source code, file paths, repository names, or credentials
+- **Zero** requests to any domain other than `j.gravelle.us`
+- `anon_id` was consistent across all requests (same UUID) and in proper UUID4 format
+
+### Phase C: Filesystem Audit + Cleanup
+
+- **Scanned all index files** in `/tmp/audit_index_v2/` — zero credentials found in any stored JSON or raw content file
+- `invalidate_cache` made **zero network requests**
+- All stored data was local-only and contained no sensitive information
+
+### Conclusion
+
+**No code exfiltration detected across any of the 11 tools.** The only outbound data when telemetry is enabled is an anonymous integer counter. Setting `JCODEMUNCH_SHARE_SAVINGS=0` eliminates all outbound traffic except to `api.github.com` (for `index_repo` only).
+
+---
+
 ## Phase 1: Static Application Security Testing
 
 ### 1.1 Dependency Review
