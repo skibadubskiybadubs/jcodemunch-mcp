@@ -110,9 +110,9 @@ IDs remain stable across re-indexing when path, qualified name, and kind are unc
 ### Prerequisites
 
 - Python 3.10+
-- pip
+- pip (or Docker for isolated deployment)
 
-### Install
+### Install via pip
 
 ```bash
 pip install jcodemunch-mcp
@@ -123,6 +123,37 @@ Verify:
 ```bash
 jcodemunch-mcp --help
 ```
+
+### Install via Docker (recommended for security-sensitive environments)
+
+```bash
+git clone https://github.com/jgravelle/jcodemunch-mcp.git
+cd jcodemunch-mcp
+docker build -t jcodemunch-mcp .
+```
+
+Run with **zero network access** — the strongest isolation available:
+
+```json
+{
+  "mcpServers": {
+    "jcodemunch": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "--network", "none",
+        "-v", ".:/workspace:ro",
+        "-v", "jcodemunch-index:/home/mcp/.code-index",
+        "-e", "JCODEMUNCH_SHARE_SAVINGS=0",
+        "-e", "CODE_INDEX_PATH=/home/mcp/.code-index",
+        "jcodemunch-mcp"
+      ]
+    }
+  }
+}
+```
+
+This removes the entire network stack from the container — no DNS, no TCP, no telemetry. All 11 tools remain fully functional for local code indexing. See [SECURE_DEPLOYMENT.md](SECURE_DEPLOYMENT.md) for full details.
 
 ---
 
@@ -313,8 +344,9 @@ Built-in protections:
 - Secret file exclusion (`.env`, `*.pem`, etc.)
 - Binary detection
 - Configurable file size limits
+- Docker `--network none` deployment for kernel-enforced network isolation
 
-See SECURITY.md for details.
+See [SECURITY.md](SECURITY.md) for built-in controls, [SECURE_DEPLOYMENT.md](SECURE_DEPLOYMENT.md) for deployment hardening, and [SECURITY_AUDIT_REPORT.md](SECURITY_AUDIT_REPORT.md) for the full audit.
 
 ---
 
@@ -391,11 +423,13 @@ To disable, set `JCODEMUNCH_SHARE_SAVINGS=0` in your MCP server env.
 
 ## Documentation
 
-- USER_GUIDE.md
-- ARCHITECTURE.md
-- SPEC.md
-- SECURITY.md
-- LANGUAGE_SUPPORT.md
+- [USER_GUIDE.md](USER_GUIDE.md) — Installation, configuration, workflows, tool reference
+- [SECURE_DEPLOYMENT.md](SECURE_DEPLOYMENT.md) — Docker `--network none`, Compose internal network, bare-install hardening
+- [SECURITY_AUDIT_REPORT.md](SECURITY_AUDIT_REPORT.md) — Full static + dynamic security audit (all 11 tools, telemetry, credential tracing)
+- [ARCHITECTURE.md](ARCHITECTURE.md) — System design and component overview
+- [SPEC.md](SPEC.md) — Protocol and API specification
+- [SECURITY.md](SECURITY.md) — Built-in security controls (path traversal, symlink, secret exclusion)
+- [LANGUAGE_SUPPORT.md](LANGUAGE_SUPPORT.md) — Supported languages and symbol types
 
 ---
 

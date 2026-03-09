@@ -2,8 +2,10 @@
 
 ## Installation
 
+### pip (standard)
+
 ```bash
-pip install git+https://github.com/jgravelle/jcodemunch-mcp.git
+pip install jcodemunch-mcp
 ```
 
 Or from source:
@@ -13,6 +15,18 @@ git clone https://github.com/jgravelle/jcodemunch-mcp.git
 cd jcodemunch-mcp
 pip install -e .
 ```
+
+### Docker (network-isolated)
+
+For security-sensitive environments, run with zero outbound network access:
+
+```bash
+git clone https://github.com/jgravelle/jcodemunch-mcp.git
+cd jcodemunch-mcp
+docker build -t jcodemunch-mcp .
+```
+
+Then configure your MCP client to use Docker with `--network none`. See [SECURE_DEPLOYMENT.md](SECURE_DEPLOYMENT.md) for complete Docker and Docker Compose configurations.
 
 ---
 
@@ -235,6 +249,18 @@ To disable, set `JCODEMUNCH_SHARE_SAVINGS=0` in your MCP server env:
   }
 }
 ```
+
+---
+
+## Deployment Options
+
+| Mode | Network Access | Isolation Level | Guide |
+|------|---------------|-----------------|-------|
+| Bare install (`pip`) | Application-level controls | Env vars disable telemetry/API calls | [Option A](SECURE_DEPLOYMENT.md#option-a-bare-install-no-docker) |
+| Docker `--network none` | Kernel-blocked (no TCP/DNS) | Strongest — zero network stack | [Option B](SECURE_DEPLOYMENT.md#option-b-docker-with---network-none) |
+| Docker Compose `internal` | Network-blocked (no gateway) | Strong — container-to-container only | [Option C](SECURE_DEPLOYMENT.md#option-c-docker-compose-with-internal-network) |
+
+For full configuration examples, verification steps, and security audit results, see [SECURE_DEPLOYMENT.md](SECURE_DEPLOYMENT.md).
 
 ---
 
