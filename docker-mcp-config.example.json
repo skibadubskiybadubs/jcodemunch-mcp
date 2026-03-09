@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "jcodemunch": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "--network", "none",
+        "-v", "C:\\Users\\YOU\\Projects\\myapp:/workspace:ro",
+        "-v", "jcodemunch-index:/home/mcp/.code-index",
+        "-e", "JCODEMUNCH_SHARE_SAVINGS=0",
+        "-e", "CODE_INDEX_PATH=/home/mcp/.code-index",
+        "jcodemunch-mcp"
+      ]
+    }
+  }
+}

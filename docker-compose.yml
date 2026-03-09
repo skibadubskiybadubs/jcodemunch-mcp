@@ -1,0 +1,31 @@
+# Network-isolated jcodemunch-mcp for local-only code indexing.
+#
+# Usage:
+#   docker compose build
+#   docker compose run --rm jcodemunch
+#
+# The "no-internet" network has no external gateway, so the container
+# cannot reach any remote host — not GitHub, not j.gravelle.us, nothing.
+
+services:
+  jcodemunch:
+    build: .
+    stdin_open: true
+    networks:
+      - no-internet
+    volumes:
+      # Mount your source code as read-only
+      - ${PROJECT_DIR:-.}:/workspace:ro
+      # Persist the index across runs
+      - jcodemunch-index:/home/mcp/.code-index
+    environment:
+      - JCODEMUNCH_SHARE_SAVINGS=0
+      - CODE_INDEX_PATH=/home/mcp/.code-index
+
+networks:
+  no-internet:
+    driver: bridge
+    internal: true   # <-- This is the key: no default gateway, no internet
+
+volumes:
+  jcodemunch-index:
