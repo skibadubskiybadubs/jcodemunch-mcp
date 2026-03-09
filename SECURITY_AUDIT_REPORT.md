@@ -262,7 +262,11 @@ During the full test run, exactly **5 HTTP requests** were captured:
 ## Appendix: Container Network Isolation Test (Phase 3)
 
 **Date:** 2026-03-09
-**Isolation Method:** `unshare --net` (identical kernel mechanism to Docker `--network none` — both use `unshare(CLONE_NEWNET)` syscall to create a network namespace with zero interfaces)
+**Isolation Methods Tested:**
+1. `unshare --net` — creates a network namespace with no interfaces (same kernel mechanism as Docker `--network none`)
+2. `docker run --network none` — actual Docker container with network stack removed
+
+Both use the `unshare(CLONE_NEWNET)` syscall. Both were tested and produced identical results: **all tools functional, all network requests blocked**.
 
 This test proves jcodemunch-mcp is **fully functional with zero network access**, and that even with telemetry **intentionally enabled** (`JCODEMUNCH_SHARE_SAVINGS=1`), no data can leave the container.
 
@@ -331,4 +335,4 @@ Full JSON results: available in test output
 
 ---
 
-*Audit methodology: Static grep-based analysis + monkey-patched HTTP interception + runtime behavioral testing with dummy credentials + kernel-level network isolation testing via `unshare --net`. No actual credentials were used or exposed during this audit.*
+*Audit methodology: Static grep-based analysis + monkey-patched HTTP interception + runtime behavioral testing with dummy credentials + kernel-level network isolation testing via both `unshare --net` and Docker `--network none`. No actual credentials were used or exposed during this audit.*

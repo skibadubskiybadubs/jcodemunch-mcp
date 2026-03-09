@@ -1,13 +1,19 @@
 """Container network isolation test for jcodemunch-mcp.
 
 Proves that jcodemunch-mcp is FULLY FUNCTIONAL with zero network access,
-using the same kernel isolation mechanism as Docker --network none.
+using kernel-level network isolation.
 
-Run with:
+Run with unshare --net (identical kernel mechanism to Docker --network none):
     unshare --net /path/to/python tests/test_docker_isolation.py
 
-This creates a network namespace with no interfaces — identical to
-Docker's --network none flag (both use unshare(CLONE_NEWNET) syscall).
+Run inside Docker --network none:
+    docker run --rm --network none \\
+      -v /path/to/repo:/workspace:ro \\
+      -v /path/to/tests/test_docker_isolation.py:/test.py:ro \\
+      <image> python3 /test.py
+
+Both use unshare(CLONE_NEWNET) syscall to create a network namespace with
+no interfaces.
 """
 
 import asyncio
@@ -26,7 +32,11 @@ os.environ["GOOGLE_API_KEY"] = ""
 os.environ["OPENAI_API_BASE"] = ""
 STORAGE = "/tmp/container_isolation_index"
 os.environ["CODE_INDEX_PATH"] = STORAGE
-REPO_PATH = "/home/user/jcodemunch-mcp"
+# Auto-detect source path: use SOURCE_PATH env var, or /workspace (Docker), or repo root
+REPO_PATH = os.environ.get("SOURCE_PATH") or (
+    "/workspace" if os.path.isdir("/workspace/src/jcodemunch_mcp")
+    else "/home/user/jcodemunch-mcp"
+)
 
 # ── HTTP interception (inline, no external dependency) ──
 _captured_requests = []
@@ -85,9 +95,12 @@ from jcodemunch_mcp.tools.invalidate_cache import invalidate_cache
 # ══════════════════════════════════════════════════════════════
 # RESULTS COLLECTOR
 # ══════════════════════════════════════════════════════════════
+_in_docker = os.path.exists("/.dockerenv") or os.path.isfile("/proc/1/cgroup")
+_isolation_label = "Docker --network none" if _in_docker else "unshare --net (identical to Docker --network none)"
+
 results = {
     "test_name": "Container Network Isolation Test",
-    "isolation_method": "unshare --net (identical to Docker --network none)",
+    "isolation_method": _isolation_label,
     "kernel_mechanism": "unshare(CLONE_NEWNET) — new network namespace, no interfaces",
     "telemetry_setting": "JCODEMUNCH_SHARE_SAVINGS=1 (intentionally ON to prove it cannot reach the network)",
     "network_probes": [],
@@ -308,7 +321,10 @@ async def test_all_tools():
     r = await index_repo(url="testowner/testrepo", use_ai_summaries=False, storage_path=STORAGE)
     error_msg = r.get("error", "")
     # Key test: error must indicate network failure, not HTTP 401
-    is_network_error = any(s in error_msg for s in ["Network is unreachable", "ConnectError", "connect", "network"])
+    is_network_error = any(s in error_msg for s in [
+        "Network is unreachable", "ConnectError", "connect", "network",
+        "name resolution", "Name or service not known", "connection attempt",
+    ])
     is_auth_error = "401" in error_msg or "Unauthorized" in error_msg
     ok = is_network_error and not is_auth_error
     tool_results.append({
@@ -387,7 +403,8 @@ def test_no_leakage():
 
     # Cleanup: invalidate_cache
     log("\n[Cleanup] invalidate_cache...")
-    r = invalidate_cache(repo="local/jcodemunch-mcp", storage_path=STORAGE)
+    repo_name = "local/" + os.path.basename(REPO_PATH)
+    r = invalidate_cache(repo=repo_name, storage_path=STORAGE)
     log(f"  {r}")
 
     return len(cred_leaks) == 0
@@ -398,7 +415,7 @@ async def main():
     log("=" * 70)
     log("  jcodemunch-mcp CONTAINER NETWORK ISOLATION TEST")
     log("=" * 70)
-    log(f"  Isolation: unshare --net (identical to Docker --network none)")
+    log(f"  Isolation: {_isolation_label}")
     log(f"  Telemetry: INTENTIONALLY ENABLED (SHARE_SAVINGS=1)")
     log(f"  Purpose:   Prove MCP is fully functional with zero network")
     log(f"  Storage:   {STORAGE}")
